@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { staffService } from '@/services/staff.service';
 import { expenseService } from '@/services/expense.service';
@@ -45,62 +46,56 @@ export const backgroundScheduler = {
 };
 
 /**
- * Validates Fonnte webhook authentication secret.
- * 
- * In Fonnte's architecture:
- * 1. Outbound API calls use `FONNTE_TOKEN` via `Authorization: <token>`.
- * 2. Inbound Webhook requests verify authenticity via Fonnte's official `secret_key` field
- *    in the payload body (enabled via Fonnte Dashboard -> Webhook -> Secret Key).
- * 3. Fallback header `Authorization: Bearer <secret>` / `x-fonnte-token: <secret>` is supported
- *    for serverless/proxy test automation.
+ * Constant-time string comparison using SHA-256 digests to prevent timing side-channel attacks.
  */
-function verifyWebhookSecret(req: NextRequest, body?: unknown): boolean {
-  const expectedSecret =
-    process.env.FONNTE_WEBHOOK_SECRET ||
-    process.env.FONNTE_WEBHOOK_TOKEN ||
-    process.env.FONNTE_TOKEN;
+function secureCompare(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const hashA = crypto.createHash('sha256').update(a).digest();
+  const hashB = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(hashA, hashB);
+}
 
-  // In development/test if no secret is configured, allow for local testing with warning
-  if (!expectedSecret) {
+/**
+ * Validates Fonnte inbound webhook authentication secret.
+ * 
+ * Strict Security Architecture:
+ * 1. Webhook authentication source is EXCLUSIVELY `process.env.FONNTE_WEBHOOK_SECRET`.
+ * 2. Inbound webhook credential is EXCLUSIVELY extracted from payload `body.secret_key`.
+ * 3. `FONNTE_TOKEN` is NEVER used for inbound webhook authentication (reserved exclusively for outbound API in `lib/fonnte.ts`).
+ * 4. Fallback aliases (`FONNTE_WEBHOOK_TOKEN`, `FONNTE_API_TOKEN`, headers, query params) are NOT accepted.
+ * 5. In production or test when configured, missing or invalid secret fails closed immediately with 401.
+ */
+function verifyWebhookSecret(body?: unknown): boolean {
+  const expectedSecret = process.env.FONNTE_WEBHOOK_SECRET;
+
+  const isSecretConfigured = typeof expectedSecret === 'string' && expectedSecret.trim().length > 0;
+
+  if (!isSecretConfigured) {
     if (process.env.NODE_ENV === 'production') {
       console.error('[Security Exception]: FONNTE_WEBHOOK_SECRET is required in production.');
-      return false;
+    } else {
+      console.warn('[Webhook Auth]: FONNTE_WEBHOOK_SECRET is not configured in environment.');
     }
-    return true;
+    console.log(
+      `[Webhook Auth] webhook_secret_configured=false webhook_secret_present=false webhook_authentication=failed`
+    );
+    return false;
   }
 
-  // 1. Official Fonnte Webhook Mechanism: `secret_key` body field
   let bodySecretKey: string | null = null;
   if (body && typeof body === 'object' && body !== null) {
     const b = body as Record<string, unknown>;
-    if (typeof b.secret_key === 'string') {
+    if (typeof b.secret_key === 'string' && b.secret_key.trim().length > 0) {
       bodySecretKey = b.secret_key.trim();
     }
   }
 
-  // 2. Direct Header Verification (Authorization: Bearer <secret> or raw <secret>, or x-fonnte-token)
-  const authHeader = req.headers.get('authorization');
-  let bearerToken: string | null = null;
-  if (authHeader) {
-    bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
-  }
+  const isSecretPresent = !!bodySecretKey;
+  const isAuthenticated = isSecretPresent && secureCompare(bodySecretKey!, expectedSecret.trim());
 
-  const customHeader = req.headers.get('x-fonnte-token')?.trim() || null;
-
-  const providedSecret = bodySecretKey || bearerToken || customHeader;
-  const isAuthenticated = providedSecret === expectedSecret;
-
-  // Safe diagnostic logging — NEVER logs raw secret values
-  const authMethod = bodySecretKey
-    ? 'body_secret_key'
-    : bearerToken
-    ? 'authorization'
-    : customHeader
-    ? 'x_fonnte_token'
-    : 'none';
-
+  // Safe diagnostic logging — NEVER logs raw secrets or keys
   console.log(
-    `[Webhook Auth] secret_key_present=${!!bodySecretKey} authorization_present=${!!authHeader} x_fonnte_token_present=${!!customHeader} expected_secret_configured=${!!expectedSecret} authentication_method=${authMethod} authentication_result=${isAuthenticated ? 'success' : 'rejected'}`
+    `[Webhook Auth] webhook_secret_configured=${isSecretConfigured} webhook_secret_present=${isSecretPresent} webhook_authentication=${isAuthenticated ? 'success' : 'failed'}`
   );
 
   return isAuthenticated;
@@ -139,9 +134,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 2. Layer 1 Security: Webhook Secret Verification (Header, Query, or Body payload)
-  if (!verifyWebhookSecret(req, rawBody)) {
-    console.warn('[Webhook Rejected]: Invalid or missing Fonnte webhook token.');
+  // 2. Layer 1 Security: Webhook Secret Verification (Strict body.secret_key against FONNTE_WEBHOOK_SECRET)
+  if (!verifyWebhookSecret(rawBody)) {
+    console.warn('[Webhook Rejected]: Invalid or missing Fonnte webhook secret.');
     return NextResponse.json(
       { data: null, error: { code: 'UNAUTHORIZED_WEBHOOK', message: 'Unauthorized webhook request' } },
       { status: 401 }

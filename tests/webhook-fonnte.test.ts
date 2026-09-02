@@ -48,48 +48,13 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
 
   beforeEach(() => {
     sentMessages.length = 0;
-    process.env.FONNTE_WEBHOOK_TOKEN = 'test_webhook_secret_token_123';
+    delete process.env.FONNTE_TOKEN;
+    delete process.env.FONNTE_WEBHOOK_TOKEN;
+    process.env.FONNTE_WEBHOOK_SECRET = 'test_webhook_secret_key_123';
   });
 
   describe('Webhook Secret Verification (Layer 1 Security)', () => {
-    it('should reject requests with invalid webhook secret (401)', async () => {
-      const req = new NextRequest('http://localhost:3000/api/webhook', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          sender: '081234567890',
-          message: 'bantuan',
-          secret_key: 'wrong_secret_key',
-        }),
-      });
-
-      const res = await webhookHandler(req);
-      assert.strictEqual(res.status, 401);
-      const json = await res.json();
-      assert.strictEqual(json.error.code, 'UNAUTHORIZED_WEBHOOK');
-    });
-
-    it('should reject requests with missing webhook secret (401)', async () => {
-      const req = new NextRequest('http://localhost:3000/api/webhook', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          sender: '081234567890',
-          message: 'bantuan',
-        }),
-      });
-
-      const res = await webhookHandler(req);
-      assert.strictEqual(res.status, 401);
-      const json = await res.json();
-      assert.strictEqual(json.error.code, 'UNAUTHORIZED_WEBHOOK');
-    });
-
-    it('should accept requests authenticated via official Fonnte secret_key body field', async () => {
+    it('should accept requests with valid secret_key matching FONNTE_WEBHOOK_SECRET (200)', async () => {
       staffRepository.findActiveByPhone = async (phone: string) => {
         return phone === activeStaff.phoneNumber ? activeStaff : null;
       };
@@ -102,7 +67,7 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
         body: JSON.stringify({
           sender: '081234567890',
           message: 'bantuan',
-          secret_key: 'test_webhook_secret_token_123',
+          secret_key: 'test_webhook_secret_key_123',
         }),
       });
 
@@ -112,16 +77,11 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
       assert.strictEqual(json.data.status, 'help_sent');
     });
 
-    it('should accept requests authenticated via Authorization Bearer header', async () => {
-      staffRepository.findActiveByPhone = async (phone: string) => {
-        return phone === activeStaff.phoneNumber ? activeStaff : null;
-      };
-
+    it('should reject requests with missing secret_key in payload (401)', async () => {
       const req = new NextRequest('http://localhost:3000/api/webhook', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: 'Bearer test_webhook_secret_token_123',
         },
         body: JSON.stringify({
           sender: '081234567890',
@@ -130,58 +90,131 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
       });
 
       const res = await webhookHandler(req);
-      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.status, 401);
+      const json = await res.json();
+      assert.strictEqual(json.error.code, 'UNAUTHORIZED_WEBHOOK');
     });
 
-    it('should accept requests authenticated via x-fonnte-token header', async () => {
-      staffRepository.findActiveByPhone = async (phone: string) => {
-        return phone === activeStaff.phoneNumber ? activeStaff : null;
-      };
-
+    it('should reject requests with invalid secret_key in payload (401)', async () => {
       const req = new NextRequest('http://localhost:3000/api/webhook', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'x-fonnte-token': 'test_webhook_secret_token_123',
         },
         body: JSON.stringify({
           sender: '081234567890',
           message: 'bantuan',
+          secret_key: 'wrong_secret_key_value',
         }),
       });
 
       const res = await webhookHandler(req);
-      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.status, 401);
+      const json = await res.json();
+      assert.strictEqual(json.error.code, 'UNAUTHORIZED_WEBHOOK');
     });
 
-    it('should prioritize FONNTE_WEBHOOK_SECRET for inbound webhook verification', async () => {
-      process.env.FONNTE_WEBHOOK_SECRET = 'dedicated_webhook_secret_key_999';
-      process.env.FONNTE_TOKEN = 'outbound_device_token_abc';
-
-      staffRepository.findActiveByPhone = async (phone: string) => {
-        return phone === activeStaff.phoneNumber ? activeStaff : null;
-      };
-
-      // Request using FONNTE_WEBHOOK_SECRET should succeed
-      const req = new NextRequest('http://localhost:3000/api/webhook', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          sender: '081234567890',
-          message: 'bantuan',
-          secret_key: 'dedicated_webhook_secret_key_999',
-        }),
-      });
-
-      const res = await webhookHandler(req);
-      assert.strictEqual(res.status, 200);
-
-      // Clean up
+    it('should reject requests when FONNTE_WEBHOOK_SECRET is not configured (401)', async () => {
       delete process.env.FONNTE_WEBHOOK_SECRET;
-      delete process.env.FONNTE_TOKEN;
-      process.env.FONNTE_WEBHOOK_TOKEN = 'test_webhook_secret_token_123';
+
+      const req = new NextRequest('http://localhost:3000/api/webhook', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          sender: '081234567890',
+          message: 'bantuan',
+          secret_key: 'test_webhook_secret_key_123',
+        }),
+      });
+
+      const res = await webhookHandler(req);
+      assert.strictEqual(res.status, 401);
+      const json = await res.json();
+      assert.strictEqual(json.error.code, 'UNAUTHORIZED_WEBHOOK');
+    });
+
+    it('should NOT allow FONNTE_TOKEN to authenticate inbound webhook requests (401)', async () => {
+      delete process.env.FONNTE_WEBHOOK_SECRET;
+      process.env.FONNTE_TOKEN = 'outbound_device_token_xyz';
+
+      const req = new NextRequest('http://localhost:3000/api/webhook', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          sender: '081234567890',
+          message: 'bantuan',
+          secret_key: 'outbound_device_token_xyz',
+        }),
+      });
+
+      const res = await webhookHandler(req);
+      assert.strictEqual(res.status, 401);
+      const json = await res.json();
+      assert.strictEqual(json.error.code, 'UNAUTHORIZED_WEBHOOK');
+    });
+
+    it('should NOT allow legacy FONNTE_WEBHOOK_TOKEN to authenticate inbound webhook requests (401)', async () => {
+      delete process.env.FONNTE_WEBHOOK_SECRET;
+      process.env.FONNTE_WEBHOOK_TOKEN = 'legacy_webhook_token_abc';
+
+      const req = new NextRequest('http://localhost:3000/api/webhook', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          sender: '081234567890',
+          message: 'bantuan',
+          secret_key: 'legacy_webhook_token_abc',
+        }),
+      });
+
+      const res = await webhookHandler(req);
+      assert.strictEqual(res.status, 401);
+      const json = await res.json();
+      assert.strictEqual(json.error.code, 'UNAUTHORIZED_WEBHOOK');
+    });
+
+    it('should NOT allow Authorization header alone without secret_key in payload (401)', async () => {
+      const req = new NextRequest('http://localhost:3000/api/webhook', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer test_webhook_secret_key_123',
+        },
+        body: JSON.stringify({
+          sender: '081234567890',
+          message: 'bantuan',
+        }),
+      });
+
+      const res = await webhookHandler(req);
+      assert.strictEqual(res.status, 401);
+      const json = await res.json();
+      assert.strictEqual(json.error.code, 'UNAUTHORIZED_WEBHOOK');
+    });
+
+    it('should NOT allow x-fonnte-token header alone without secret_key in payload (401)', async () => {
+      const req = new NextRequest('http://localhost:3000/api/webhook', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-fonnte-token': 'test_webhook_secret_key_123',
+        },
+        body: JSON.stringify({
+          sender: '081234567890',
+          message: 'bantuan',
+        }),
+      });
+
+      const res = await webhookHandler(req);
+      assert.strictEqual(res.status, 401);
+      const json = await res.json();
+      assert.strictEqual(json.error.code, 'UNAUTHORIZED_WEBHOOK');
     });
 
     it('should never expose raw credentials or secret tokens in log messages', async () => {
@@ -193,7 +226,7 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
       };
 
       try {
-        const secretToken = 'super_secret_fonnte_token_never_log_me';
+        const secretToken = 'super_secret_fonnte_webhook_key_never_log_me';
         process.env.FONNTE_WEBHOOK_SECRET = secretToken;
 
         const req = new NextRequest('http://localhost:3000/api/webhook', {
@@ -215,8 +248,7 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
         assert.strictEqual(leaked, false, 'Secret token was leaked in logs!');
       } finally {
         console.log = origLog;
-        delete process.env.FONNTE_WEBHOOK_SECRET;
-        process.env.FONNTE_WEBHOOK_TOKEN = 'test_webhook_secret_token_123';
+        process.env.FONNTE_WEBHOOK_SECRET = 'test_webhook_secret_key_123';
       }
     });
   });
@@ -229,11 +261,11 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: 'Bearer test_webhook_secret_token_123',
         },
         body: JSON.stringify({
           sender: '089999999999',
           message: 'manual: Indomaret | 50000 | ATK',
+          secret_key: 'test_webhook_secret_key_123',
         }),
       });
 
@@ -255,12 +287,12 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: 'Bearer test_webhook_secret_token_123',
         },
         body: JSON.stringify({
           sender: '081234567890',
           url: 'https://cdn.fonnte.com/receipt_sample_123.jpg',
           message: 'Struk bensin SPBU',
+          secret_key: 'test_webhook_secret_key_123',
         }),
       });
 
@@ -282,13 +314,13 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
         id: 'msg_unique_id_99999',
         sender: '081234567890',
         message: 'bantuan',
+        secret_key: 'test_webhook_secret_key_123',
       };
 
       const req1 = new NextRequest('http://localhost:3000/api/webhook', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: 'Bearer test_webhook_secret_token_123',
         },
         body: JSON.stringify(payload),
       });
@@ -301,7 +333,6 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: 'Bearer test_webhook_secret_token_123',
         },
         body: JSON.stringify(payload),
       });
@@ -344,11 +375,11 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: 'Bearer test_webhook_secret_token_123',
         },
         body: JSON.stringify({
           sender: '081234567890',
           message: 'manual: Indomaret Cipayung | 145000 | ATK',
+          secret_key: 'test_webhook_secret_key_123',
         }),
       });
 
@@ -396,11 +427,11 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: 'Bearer test_webhook_secret_token_123',
         },
         body: JSON.stringify({
           sender: '081234567890',
           message: 'kategori: Transport',
+          secret_key: 'test_webhook_secret_key_123',
         }),
       });
 
@@ -447,11 +478,11 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: 'Bearer test_webhook_secret_token_123',
         },
         body: JSON.stringify({
           sender: '081234567890',
           message: 'riwayat',
+          secret_key: 'test_webhook_secret_key_123',
         }),
       });
 
@@ -517,11 +548,11 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: 'Bearer test_webhook_secret_token_123',
         },
         body: JSON.stringify({
           sender: '081234567890',
           message: 'total bulan ini',
+          secret_key: 'test_webhook_secret_key_123',
         }),
       });
 
