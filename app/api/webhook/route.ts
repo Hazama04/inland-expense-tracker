@@ -58,14 +58,15 @@ function secureCompare(a: string, b: string): boolean {
 /**
  * Validates Fonnte inbound webhook authentication secret.
  * 
- * Strict Security Architecture:
+ * Inbound Webhook Architecture:
  * 1. Webhook authentication source is EXCLUSIVELY `process.env.FONNTE_WEBHOOK_SECRET`.
- * 2. Inbound webhook credential is EXCLUSIVELY extracted from payload `body.secret_key`.
+ * 2. Inbound webhook credential is extracted from URL query parameter `?token=<secret>`
+ *    (or optionally from payload `body.secret_key` if enabled on device).
  * 3. `FONNTE_TOKEN` is NEVER used for inbound webhook authentication (reserved exclusively for outbound API in `lib/fonnte.ts`).
- * 4. Fallback aliases (`FONNTE_WEBHOOK_TOKEN`, `FONNTE_API_TOKEN`, headers, query params) are NOT accepted.
+ * 4. Fallback aliases (`FONNTE_WEBHOOK_TOKEN`, `FONNTE_API_TOKEN`, headers, non-token query params) are NOT accepted.
  * 5. In production or test when configured, missing or invalid secret fails closed immediately with 401.
  */
-function verifyWebhookSecret(body?: unknown): boolean {
+function verifyWebhookSecret(req: NextRequest, body?: unknown): boolean {
   const expectedSecret = process.env.FONNTE_WEBHOOK_SECRET;
 
   const isSecretConfigured = typeof expectedSecret === 'string' && expectedSecret.trim().length > 0;
@@ -82,18 +83,21 @@ function verifyWebhookSecret(body?: unknown): boolean {
     return false;
   }
 
-  let bodySecretKey: string | null = null;
-  if (body && typeof body === 'object' && body !== null) {
+  // 1. Primary: URL query parameter ?token=...
+  let providedSecret = req.nextUrl.searchParams.get('token')?.trim() || null;
+
+  // 2. Secondary: body.secret_key (if present in payload)
+  if (!providedSecret && body && typeof body === 'object' && body !== null) {
     const b = body as Record<string, unknown>;
     if (typeof b.secret_key === 'string' && b.secret_key.trim().length > 0) {
-      bodySecretKey = b.secret_key.trim();
+      providedSecret = b.secret_key.trim();
     }
   }
 
-  const isSecretPresent = !!bodySecretKey;
-  const isAuthenticated = isSecretPresent && secureCompare(bodySecretKey!, expectedSecret.trim());
+  const isSecretPresent = !!providedSecret;
+  const isAuthenticated = isSecretPresent && secureCompare(providedSecret!, expectedSecret.trim());
 
-  // Safe diagnostic logging — NEVER logs raw secrets or keys
+  // Safe diagnostic logging — NEVER logs raw secrets, tokens, or full URLs
   console.log(
     `[Webhook Auth] webhook_secret_configured=${isSecretConfigured} webhook_secret_present=${isSecretPresent} webhook_authentication=${isAuthenticated ? 'success' : 'failed'}`
   );
@@ -134,8 +138,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 2. Layer 1 Security: Webhook Secret Verification (Strict body.secret_key against FONNTE_WEBHOOK_SECRET)
-  if (!verifyWebhookSecret(rawBody)) {
+  // 2. Layer 1 Security: Webhook Secret Verification (Strict ?token= or body.secret_key against FONNTE_WEBHOOK_SECRET)
+  if (!verifyWebhookSecret(req, rawBody)) {
     console.warn('[Webhook Rejected]: Invalid or missing Fonnte webhook secret.');
     return NextResponse.json(
       { data: null, error: { code: 'UNAUTHORIZED_WEBHOOK', message: 'Unauthorized webhook request' } },
