@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint",
     "test": "tsx --test tests/**/*.test.ts",
@@ -13,7 +13,7 @@
     "diagnostic:gemini": "tsx scripts/diagnostic-gemini-models.ts",
     "diagnostic:v16": "tsx scripts/diagnostic-v16.ts",
     "test:e2e:receipt": "tsx scripts/e2e-receipt-pipeline.ts",
-    "postinstall": "prisma skills sync || exit 0"
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@google/genai": "^2.20.0",
