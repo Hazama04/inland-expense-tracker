@@ -45,51 +45,91 @@ export const backgroundScheduler = {
 };
 
 /**
- * Validates Fonnte webhook authentication token / secret.
+ * Validates Fonnte webhook authentication token / secret across:
+ * 1. Authorization header (Bearer <token> or raw <token>)
+ * 2. Token custom headers (`token`, `x-fonnte-token`, `x-token`)
+ * 3. Query string parameters (`?token=...`, `?secret=...`, `?key=...`)
+ * 4. Request body payload fields (`token`, `secret`, `key`)
  */
-function verifyWebhookSecret(req: NextRequest): boolean {
-  const expectedSecret = process.env.FONNTE_WEBHOOK_TOKEN || process.env.FONNTE_TOKEN;
+function verifyWebhookSecret(req: NextRequest, body?: unknown): boolean {
+  const expectedSecret =
+    process.env.FONNTE_WEBHOOK_TOKEN ||
+    process.env.FONNTE_TOKEN ||
+    process.env.FONNTE_API_TOKEN;
 
   // In development/test if no secret is configured, allow for local testing with warning
   if (!expectedSecret) {
     if (process.env.NODE_ENV === 'production') {
-      console.error('[Security Exception]: FONNTE_WEBHOOK_TOKEN is required in production.');
+      console.error('[Security Exception]: FONNTE_TOKEN or FONNTE_WEBHOOK_TOKEN is required in production.');
       return false;
     }
     return true;
   }
 
+  // 1. Authorization header (Bearer <token> or raw <token>)
   const authHeader = req.headers.get('authorization');
-  const tokenHeader = req.headers.get('token') || req.headers.get('x-fonnte-token');
-  const urlToken = req.nextUrl.searchParams.get('token');
-
   let bearerToken: string | null = null;
   if (authHeader) {
     bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
   }
 
-  const providedToken = bearerToken || tokenHeader || urlToken;
-  return providedToken === expectedSecret;
+  // 2. Custom token headers
+  const tokenHeader =
+    req.headers.get('token')?.trim() ||
+    req.headers.get('x-fonnte-token')?.trim() ||
+    req.headers.get('x-token')?.trim() ||
+    null;
+
+  // 3. Query parameters (?token=... or ?secret=... or ?key=...)
+  const searchParams = req.nextUrl.searchParams;
+  const urlToken =
+    searchParams.get('token')?.trim() ||
+    searchParams.get('secret')?.trim() ||
+    searchParams.get('key')?.trim() ||
+    null;
+
+  // 4. Request body payload fields (body.token, body.secret, body.key)
+  let bodyToken: string | null = null;
+  if (body && typeof body === 'object' && body !== null) {
+    const b = body as Record<string, unknown>;
+    if (typeof b.token === 'string') bodyToken = b.token.trim();
+    else if (typeof b.secret === 'string') bodyToken = b.secret.trim();
+    else if (typeof b.key === 'string') bodyToken = b.key.trim();
+  }
+
+  const providedToken = bearerToken || tokenHeader || urlToken || bodyToken;
+  const isAuthenticated = providedToken === expectedSecret;
+
+  // Safe diagnostic log (NEVER logs actual secrets or token strings)
+  const authMethod = bearerToken
+    ? 'authorization'
+    : tokenHeader
+    ? 'token_header'
+    : urlToken
+    ? 'query_param'
+    : bodyToken
+    ? 'body_payload'
+    : 'none';
+
+  console.log(
+    `[Webhook Auth] authorization present: ${!!authHeader} | token header present: ${!!tokenHeader} | query token present: ${!!urlToken} | body token present: ${!!bodyToken} | expected token configured: ${!!expectedSecret} | authentication method: ${authMethod} | result: ${isAuthenticated ? 'SUCCESS' : 'REJECTED'}`
+  );
+
+  return isAuthenticated;
 }
 
 export async function POST(req: NextRequest) {
-  // 1. Layer 1 Security: Webhook Secret Verification
-  if (!verifyWebhookSecret(req)) {
-    console.warn('[Webhook Rejected]: Invalid or missing Fonnte webhook token.');
-    return NextResponse.json(
-      { data: null, error: { code: 'UNAUTHORIZED_WEBHOOK', message: 'Unauthorized webhook request' } },
-      { status: 401 }
-    );
-  }
-
-  // 2. Payload Validation
+  // 1. Parse Request Body safely
   let rawBody: unknown;
   const contentType = req.headers.get('content-type') || '';
 
   try {
     if (contentType.includes('application/json')) {
       rawBody = await req.json();
-    } else if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
+    } else if (
+      contentType.includes('application/x-www-form-urlencoded') ||
+      contentType.includes('multipart/form-data')
+    ) {
       const formData = await req.formData();
       const entries: Record<string, string> = {};
       formData.forEach((value, key) => {
@@ -97,7 +137,12 @@ export async function POST(req: NextRequest) {
       });
       rawBody = entries;
     } else {
-      rawBody = await req.json();
+      const text = await req.text();
+      try {
+        rawBody = JSON.parse(text);
+      } catch {
+        rawBody = text;
+      }
     }
   } catch {
     return NextResponse.json(
@@ -106,6 +151,16 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // 2. Layer 1 Security: Webhook Secret Verification (Header, Query, or Body payload)
+  if (!verifyWebhookSecret(req, rawBody)) {
+    console.warn('[Webhook Rejected]: Invalid or missing Fonnte webhook token.');
+    return NextResponse.json(
+      { data: null, error: { code: 'UNAUTHORIZED_WEBHOOK', message: 'Unauthorized webhook request' } },
+      { status: 401 }
+    );
+  }
+
+  // 3. Payload Validation
   const parsedPayload = fonnteWebhookPayloadSchema.safeParse(rawBody);
   if (!parsedPayload.success) {
     return NextResponse.json(

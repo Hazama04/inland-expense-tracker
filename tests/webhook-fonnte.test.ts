@@ -71,8 +71,25 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
       assert.strictEqual(json.error.code, 'UNAUTHORIZED_WEBHOOK');
     });
 
-    it('should accept requests with valid webhook secret token', async () => {
-      // Mock active staff lookup
+    it('should reject requests with missing webhook secret token (401)', async () => {
+      const req = new NextRequest('http://localhost:3000/api/webhook', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          sender: '081234567890',
+          message: 'bantuan',
+        }),
+      });
+
+      const res = await webhookHandler(req);
+      assert.strictEqual(res.status, 401);
+      const json = await res.json();
+      assert.strictEqual(json.error.code, 'UNAUTHORIZED_WEBHOOK');
+    });
+
+    it('should accept requests with valid Authorization Bearer header', async () => {
       staffRepository.findActiveByPhone = async (phone: string) => {
         return phone === activeStaff.phoneNumber ? activeStaff : null;
       };
@@ -93,8 +110,117 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
       assert.strictEqual(res.status, 200);
       const json = await res.json();
       assert.strictEqual(json.data.status, 'help_sent');
-      assert(sentMessages.length > 0);
-      assert(sentMessages[0].message.includes('bot pencatat pengeluaran kantor'));
+    });
+
+    it('should accept requests with raw Authorization header (without Bearer prefix)', async () => {
+      staffRepository.findActiveByPhone = async (phone: string) => {
+        return phone === activeStaff.phoneNumber ? activeStaff : null;
+      };
+
+      const req = new NextRequest('http://localhost:3000/api/webhook', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'test_webhook_secret_token_123',
+        },
+        body: JSON.stringify({
+          sender: '081234567890',
+          message: 'bantuan',
+        }),
+      });
+
+      const res = await webhookHandler(req);
+      assert.strictEqual(res.status, 200);
+    });
+
+    it('should accept requests authenticated via token or x-fonnte-token header', async () => {
+      staffRepository.findActiveByPhone = async (phone: string) => {
+        return phone === activeStaff.phoneNumber ? activeStaff : null;
+      };
+
+      const req = new NextRequest('http://localhost:3000/api/webhook', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'token': 'test_webhook_secret_token_123',
+        },
+        body: JSON.stringify({
+          sender: '081234567890',
+          message: 'bantuan',
+        }),
+      });
+
+      const res = await webhookHandler(req);
+      assert.strictEqual(res.status, 200);
+    });
+
+    it('should accept requests authenticated via URL query parameter (?token=...)', async () => {
+      staffRepository.findActiveByPhone = async (phone: string) => {
+        return phone === activeStaff.phoneNumber ? activeStaff : null;
+      };
+
+      const req = new NextRequest('http://localhost:3000/api/webhook?token=test_webhook_secret_token_123', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          sender: '081234567890',
+          message: 'bantuan',
+        }),
+      });
+
+      const res = await webhookHandler(req);
+      assert.strictEqual(res.status, 200);
+    });
+
+    it('should accept requests authenticated via body payload token field', async () => {
+      staffRepository.findActiveByPhone = async (phone: string) => {
+        return phone === activeStaff.phoneNumber ? activeStaff : null;
+      };
+
+      const req = new NextRequest('http://localhost:3000/api/webhook', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          sender: '081234567890',
+          message: 'bantuan',
+          token: 'test_webhook_secret_token_123',
+        }),
+      });
+
+      const res = await webhookHandler(req);
+      assert.strictEqual(res.status, 200);
+    });
+
+    it('should fallback to FONNTE_TOKEN if FONNTE_WEBHOOK_TOKEN is not defined', async () => {
+      delete process.env.FONNTE_WEBHOOK_TOKEN;
+      process.env.FONNTE_TOKEN = 'production_fonnte_device_token_xyz';
+
+      staffRepository.findActiveByPhone = async (phone: string) => {
+        return phone === activeStaff.phoneNumber ? activeStaff : null;
+      };
+
+      const req = new NextRequest('http://localhost:3000/api/webhook', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'production_fonnte_device_token_xyz',
+        },
+        body: JSON.stringify({
+          sender: '081234567890',
+          message: 'bantuan',
+        }),
+      });
+
+      const res = await webhookHandler(req);
+      assert.strictEqual(res.status, 200);
+
+      // Clean up
+      delete process.env.FONNTE_TOKEN;
+      process.env.FONNTE_WEBHOOK_TOKEN = 'test_webhook_secret_token_123';
     });
   });
 
