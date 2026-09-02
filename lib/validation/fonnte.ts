@@ -11,8 +11,6 @@ export const fonnteWebhookPayloadSchema = z.object({
   message_id: z.string().trim().optional().nullable(),
   device: z.string().trim().optional().nullable(),
   secret_key: z.string().trim().optional().nullable(),
-  token: z.string().trim().optional().nullable(),
-  secret: z.string().trim().optional().nullable(),
 });
 
 export type FonnteWebhookPayload = z.infer<typeof fonnteWebhookPayloadSchema>;

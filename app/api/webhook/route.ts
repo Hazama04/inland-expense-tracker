@@ -45,73 +45,62 @@ export const backgroundScheduler = {
 };
 
 /**
- * Validates Fonnte webhook authentication token / secret across:
- * 1. Authorization header (Bearer <token> or raw <token>)
- * 2. Token custom headers (`x-fonnte-token`, `token`)
- * 3. Body payload fields (Fonnte official `secret_key`, `token`, `secret`)
- * 4. Query string parameters (`?token=...`, `?secret_key=...`, `?secret=...`)
+ * Validates Fonnte webhook authentication secret.
+ * 
+ * In Fonnte's architecture:
+ * 1. Outbound API calls use `FONNTE_TOKEN` via `Authorization: <token>`.
+ * 2. Inbound Webhook requests verify authenticity via Fonnte's official `secret_key` field
+ *    in the payload body (enabled via Fonnte Dashboard -> Webhook -> Secret Key).
+ * 3. Fallback header `Authorization: Bearer <secret>` / `x-fonnte-token: <secret>` is supported
+ *    for serverless/proxy test automation.
  */
 function verifyWebhookSecret(req: NextRequest, body?: unknown): boolean {
   const expectedSecret =
+    process.env.FONNTE_WEBHOOK_SECRET ||
     process.env.FONNTE_WEBHOOK_TOKEN ||
-    process.env.FONNTE_TOKEN ||
-    process.env.FONNTE_API_TOKEN;
+    process.env.FONNTE_TOKEN;
 
   // In development/test if no secret is configured, allow for local testing with warning
   if (!expectedSecret) {
     if (process.env.NODE_ENV === 'production') {
-      console.error('[Security Exception]: FONNTE_TOKEN or FONNTE_WEBHOOK_TOKEN is required in production.');
+      console.error('[Security Exception]: FONNTE_WEBHOOK_SECRET is required in production.');
       return false;
     }
     return true;
   }
 
-  // 1. Authorization header (Bearer <token> or raw <token>)
+  // 1. Official Fonnte Webhook Mechanism: `secret_key` body field
+  let bodySecretKey: string | null = null;
+  if (body && typeof body === 'object' && body !== null) {
+    const b = body as Record<string, unknown>;
+    if (typeof b.secret_key === 'string') {
+      bodySecretKey = b.secret_key.trim();
+    }
+  }
+
+  // 2. Direct Header Verification (Authorization: Bearer <secret> or raw <secret>, or x-fonnte-token)
   const authHeader = req.headers.get('authorization');
   let bearerToken: string | null = null;
   if (authHeader) {
     bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
   }
 
-  // 2. Custom token headers
-  const tokenHeader =
-    req.headers.get('x-fonnte-token')?.trim() ||
-    req.headers.get('token')?.trim() ||
-    null;
+  const customHeader = req.headers.get('x-fonnte-token')?.trim() || null;
 
-  // 3. Body payload fields (Fonnte official `secret_key`, `token`, `secret`)
-  let bodyToken: string | null = null;
-  if (body && typeof body === 'object' && body !== null) {
-    const b = body as Record<string, unknown>;
-    if (typeof b.secret_key === 'string') bodyToken = b.secret_key.trim();
-    else if (typeof b.token === 'string') bodyToken = b.token.trim();
-    else if (typeof b.secret === 'string') bodyToken = b.secret.trim();
-  }
+  const providedSecret = bodySecretKey || bearerToken || customHeader;
+  const isAuthenticated = providedSecret === expectedSecret;
 
-  // 4. Query string parameters (?token=... or ?secret_key=... or ?secret=...)
-  const searchParams = req.nextUrl.searchParams;
-  const urlToken =
-    searchParams.get('token')?.trim() ||
-    searchParams.get('secret_key')?.trim() ||
-    searchParams.get('secret')?.trim() ||
-    null;
-
-  const providedToken = bearerToken || tokenHeader || bodyToken || urlToken;
-  const isAuthenticated = providedToken === expectedSecret;
-
-  // Safe diagnostic logging — NEVER logs secrets or tokens
-  const authMethod = bearerToken
+  // Safe diagnostic logging — NEVER logs raw secret values
+  const authMethod = bodySecretKey
+    ? 'body_secret_key'
+    : bearerToken
     ? 'authorization'
-    : tokenHeader
-    ? 'token_header'
-    : bodyToken
-    ? 'body_payload'
-    : urlToken
-    ? 'query_param'
+    : customHeader
+    ? 'x_fonnte_token'
     : 'none';
 
   console.log(
-    `[Webhook Auth] authorization_present=${!!authHeader} token_header_present=${!!tokenHeader} body_token_present=${!!bodyToken} query_token_present=${!!urlToken} expected_token_configured=${!!expectedSecret} authentication_method=${authMethod} authentication_result=${isAuthenticated ? 'success' : 'rejected'}`
+    `[Webhook Auth] secret_key_present=${!!bodySecretKey} authorization_present=${!!authHeader} x_fonnte_token_present=${!!customHeader} expected_secret_configured=${!!expectedSecret} authentication_method=${authMethod} authentication_result=${isAuthenticated ? 'success' : 'rejected'}`
   );
 
   return isAuthenticated;
