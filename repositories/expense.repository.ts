@@ -205,6 +205,145 @@ export class ExpenseRepository {
       data,
     });
   }
+  async getDashboardAggregates(staffId?: string) {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+    const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+
+    const baseWhere: Prisma.ExpenseWhereInput = staffId ? { staffId } : {};
+
+    // 1. Month Expenses
+    const monthExpenses = await prisma.expense.findMany({
+      where: {
+        ...baseWhere,
+        transactionDate: { gte: startOfMonth, lte: endOfMonth },
+      },
+      select: {
+        amount: true,
+        status: true,
+        categoryId: true,
+        category: { select: { id: true, name: true } },
+      },
+    });
+
+    const monthTotal = monthExpenses.reduce((acc, curr) => acc + parseFloat(curr.amount.toString()), 0);
+    const monthCount = monthExpenses.length;
+    const autoCount = monthExpenses.filter((e) => e.status === ExpenseStatus.AUTO).length;
+    const autoRate = monthCount > 0 ? Math.round((autoCount / monthCount) * 100) : 100;
+
+    // Category breakdown
+    const catMap = new Map<string, { id: string; name: string; amount: number; count: number }>();
+    for (const exp of monthExpenses) {
+      const catId = exp.categoryId || 'uncategorized';
+      const catName = exp.category?.name || 'Tanpa Kategori';
+      const amt = parseFloat(exp.amount.toString());
+
+      const existing = catMap.get(catId) || { id: catId, name: catName, amount: 0, count: 0 };
+      existing.amount += amt;
+      existing.count += 1;
+      catMap.set(catId, existing);
+    }
+
+    const categories = Array.from(catMap.values())
+      .map((c) => ({
+        ...c,
+        percentage: monthTotal > 0 ? Math.round((c.amount / monthTotal) * 100) : 0,
+      }))
+      .sort((a, b) => b.amount - a.amount);
+
+    // 2. Today Expenses
+    const todayExpenses = await prisma.expense.findMany({
+      where: {
+        ...baseWhere,
+        transactionDate: { gte: startOfToday, lte: endOfToday },
+      },
+      select: { amount: true },
+    });
+    const todayTotal = todayExpenses.reduce((acc, curr) => acc + parseFloat(curr.amount.toString()), 0);
+    const todayCount = todayExpenses.length;
+
+    // 3. Needs Review
+    const needsReviewItems = await prisma.expense.findMany({
+      where: {
+        ...baseWhere,
+        status: ExpenseStatus.PERLU_REVIEW,
+      },
+      include: {
+        staff: true,
+        category: true,
+      },
+      orderBy: { transactionDate: 'desc' },
+      take: 5,
+    });
+    const needsReviewCount = await prisma.expense.count({
+      where: {
+        ...baseWhere,
+        status: ExpenseStatus.PERLU_REVIEW,
+      },
+    });
+
+    // 4. Daily Trend (14 days)
+    const trendExpenses = await prisma.expense.findMany({
+      where: {
+        ...baseWhere,
+        transactionDate: { gte: fourteenDaysAgo },
+      },
+      select: {
+        transactionDate: true,
+        amount: true,
+      },
+      orderBy: { transactionDate: 'asc' },
+    });
+
+    const trendMap = new Map<string, { date: string; label: string; amount: number; count: number }>();
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+      const iso = d.toISOString().split('T')[0];
+      const label = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short' }).format(d);
+      trendMap.set(iso, { date: iso, label, amount: 0, count: 0 });
+    }
+
+    for (const exp of trendExpenses) {
+      const iso = new Date(exp.transactionDate).toISOString().split('T')[0];
+      if (trendMap.has(iso)) {
+        const item = trendMap.get(iso)!;
+        item.amount += parseFloat(exp.amount.toString());
+        item.count += 1;
+      }
+    }
+    const dailyTrend = Array.from(trendMap.values());
+
+    // 5. Recent Expenses
+    const recentExpenses = await prisma.expense.findMany({
+      where: baseWhere,
+      include: {
+        staff: true,
+        category: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 6,
+    });
+
+    return {
+      kpi: {
+        monthTotal,
+        monthCount,
+        todayTotal,
+        todayCount,
+        needsReviewCount,
+        autoRate,
+      },
+      categories,
+      dailyTrend,
+      needsReviewItems,
+      recentExpenses,
+    };
+  }
 }
 
 export const expenseRepository = new ExpenseRepository();

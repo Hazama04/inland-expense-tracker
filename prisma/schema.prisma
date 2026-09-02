@@ -28,12 +28,16 @@ enum ExpenseStatus {
 }
 
 enum AuditAction {
-  CREATED           @map("created")
-  CORRECTED         @map("corrected")
-  MANUAL_INPUT      @map("manual_input")
-  DUPLICATE_FLAGGED @map("duplicate_flagged")
-  STATUS_UPDATED    @map("status_updated")
-  DELETED           @map("deleted")
+  CREATED             @map("created")
+  CORRECTED           @map("corrected")
+  MANUAL_INPUT        @map("manual_input")
+  DUPLICATE_FLAGGED   @map("duplicate_flagged")
+  STATUS_UPDATED      @map("status_updated")
+  DELETED             @map("deleted")
+  SHEETS_SYNCED       @map("sheets_synced")
+  SHEETS_SYNC_FAILED  @map("sheets_sync_failed")
+  SHEETS_RETRY        @map("sheets_retry")
+  SHEETS_MANUAL_RETRY @map("sheets_manual_retry")
 
   @@map("audit_action")
 }
@@ -84,8 +88,8 @@ model Expense {
   createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz
   updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz
 
-  auditLogs    AuditLog[]
-  syncFailures SyncFailure[]
+  auditLogs   AuditLog[]
+  syncFailure SyncFailure?
 
   @@index([staffId])
   @@index([transactionDate])
@@ -113,16 +117,24 @@ model AuditLog {
 }
 
 model SyncFailure {
-  id           String   @id @default(uuid()) @db.Uuid
-  expenseId    String   @map("expense_id") @db.Uuid
-  expense      Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
-  attemptCount Int      @default(1) @map("attempt_count")
-  lastError    String   @map("last_error")
-  resolved     Boolean  @default(false)
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  id            String    @id @default(uuid()) @db.Uuid
+  expenseId     String    @unique @map("expense_id") @db.Uuid
+  expense       Expense   @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  attemptCount  Int       @default(1) @map("attempt_count")
+  errorCode     String?   @map("error_code")
+  lastError     String    @map("last_error")
+  nextRetryAt   DateTime? @map("next_retry_at") @db.Timestamptz
+  lastAttemptAt DateTime? @map("last_attempt_at") @db.Timestamptz
+  resolvedAt    DateTime? @map("resolved_at") @db.Timestamptz
+  claimedAt     DateTime? @map("claimed_at") @db.Timestamptz
+  claimedBy     String?   @map("claimed_by")
+  resolved      Boolean   @default(false)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz
 
   @@index([expenseId])
   @@index([resolved])
+  @@index([resolved, nextRetryAt])
+  @@index([claimedAt])
   @@map("sync_failures")
 }

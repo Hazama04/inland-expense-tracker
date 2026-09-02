@@ -1,5 +1,17 @@
 import { PrismaClient } from '../../app/generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { loadEnvConfig } from '@next/env';
+import fs from 'fs';
+import path from 'path';
+
+// Ensure environment variables (.env.local / .env) are loaded in standalone scripts
+if (!process.env.DATABASE_URL) {
+  let projectDir = process.cwd();
+  if (!fs.existsSync(path.join(projectDir, 'package.json'))) {
+    projectDir = path.resolve(__dirname, '../..');
+  }
+  loadEnvConfig(projectDir, process.env.NODE_ENV !== 'production');
+}
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;

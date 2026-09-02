@@ -26,6 +26,10 @@ export class CategoryRepository {
     });
   }
 
+  async findActive(): Promise<Category[]> {
+    return this.findMany({ isActive: true });
+  }
+
   async findMany(filters: CategoryFindManyFilters = {}): Promise<Category[]> {
     const where: Prisma.CategoryWhereInput = {};
 

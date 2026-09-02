@@ -1,69 +1,142 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import React, { useState, useEffect, useCallback } from 'react';
+import { AppShell } from '@/components/layout/AppShell';
+import { KpiCards } from '@/components/dashboard/KpiCards';
+import { CategoryChart } from '@/components/dashboard/CategoryChart';
+import { TrendChart } from '@/components/dashboard/TrendChart';
+import { RecentExpenses } from '@/components/dashboard/RecentExpenses';
+import { NeedsReviewBanner } from '@/components/dashboard/NeedsReviewBanner';
+import { ExpenseDetailModal } from '@/components/expenses/ExpenseDetailModal';
+import { apiClient, DashboardStatsData, CategoryItem } from '@/lib/client/api';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { RefreshCw } from 'lucide-react';
+import { Button } from '@/components/ui/Button';
+
+export default function DashboardPage() {
+  const [stats, setStats] = useState<DashboardStatsData | null>(null);
+  const [categories, setCategories] = useState<CategoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedExpenseId, setSelectedExpenseId] = useState<string | null>(null);
+
+  const loadDashboardData = useCallback(async () => {
+    setLoading(true);
+    const [statsRes, catRes] = await Promise.all([
+      apiClient.getDashboardStats(),
+      apiClient.getCategories(),
+    ]);
+
+    if (statsRes.data) {
+      setStats(statsRes.data);
+    }
+    if (catRes.data) {
+      setCategories(catRes.data);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    let ignore = false;
+    Promise.all([apiClient.getDashboardStats(), apiClient.getCategories()]).then(
+      ([statsRes, catRes]) => {
+        if (!ignore) {
+          if (statsRes.data) setStats(statsRes.data);
+          if (catRes.data) setCategories(catRes.data);
+          setLoading(false);
+        }
+      }
+    );
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  const todayFormatted = new Intl.DateTimeFormat('id-ID', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(new Date());
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
+    <AppShell>
+      {/* 1. Page Header (Horizontal, No Card Container) */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-[#e6e6e1]">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold text-zinc-950 tracking-tight">
+            Dashboard Operasional Keuangan
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <p className="text-xs text-zinc-500 mt-0.5 font-medium">
+            <span>{todayFormatted}</span>
+            <span className="mx-1.5 text-zinc-300">·</span>
+            <span>Inland Property Expense Management</span>
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={loadDashboardData}
+            leftIcon={<RefreshCw className="w-3.5 h-3.5 text-[#065f46]" />}
           >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            Segarkan Data
+          </Button>
         </div>
-      </main>
-    </div>
+      </div>
+
+      {loading || !stats ? (
+        <div className="space-y-4">
+          <Skeleton className="h-36 w-full rounded-lg bg-emerald-950/20" />
+          <Skeleton className="h-20 w-full rounded-lg" />
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            <div className="lg:col-span-7">
+              <Skeleton className="h-72 rounded-lg" />
+            </div>
+            <div className="lg:col-span-5">
+              <Skeleton className="h-72 rounded-lg" />
+            </div>
+          </div>
+          <Skeleton className="h-64 w-full rounded-lg" />
+        </div>
+      ) : (
+        <div className="space-y-5">
+          {/* Needs Review Alert Banner (if any) */}
+          <NeedsReviewBanner count={stats.kpi?.needsReviewCount || 0} />
+
+          {/* 2. Emerald Hero (140-160px) + 3. Horizontal Secondary Reporting Strip */}
+          <KpiCards data={stats.kpi} />
+
+          {/* 4. Analytics Grid (7 cols / 5 cols, height ~280-320px) */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+            {/* Left: 14-day Daily Expense Trend */}
+            <div className="lg:col-span-7">
+              <TrendChart data={stats.dailyTrend || []} />
+            </div>
+
+            {/* Right: Ranked Category Allocation */}
+            <div className="lg:col-span-5">
+              <CategoryChart categories={stats.categories || []} />
+            </div>
+          </div>
+
+          {/* 5. Full Width Recent Activity Transaction Ledger */}
+          <div>
+            <RecentExpenses
+              expenses={stats.recentExpenses || []}
+              onSelectExpense={(id) => setSelectedExpenseId(id)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Expense Detail Modal */}
+      <ExpenseDetailModal
+        expenseId={selectedExpenseId}
+        onClose={() => setSelectedExpenseId(null)}
+        onUpdated={loadDashboardData}
+        categories={categories}
+      />
+    </AppShell>
   );
 }

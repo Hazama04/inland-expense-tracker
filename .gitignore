@@ -23,6 +23,7 @@
 # misc
 .DS_Store
 *.pem
+Gsuiteto9router/
 
 # debug
 npm-debug.log*
@@ -35,6 +36,7 @@ yarn-error.log*
 .env.local
 .env.*.local
 .env*
+!.env.example
 env
 env.local
 

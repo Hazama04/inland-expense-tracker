@@ -2,10 +2,11 @@ import { expenseRepository, ExpenseFindManyFilters, ExpenseWithRelations } from 
 import { staffRepository } from '../repositories/staff.repository';
 import { categoryRepository } from '../repositories/category.repository';
 import { auditRepository } from '../repositories/audit.repository';
-import { Actor, Permissions, requireRole, assertCanAccessExpense } from '../lib/auth/authorization';
+import { Actor, Permissions, requireRole, assertCanAccessExpense, requireActor } from '../lib/auth/authorization';
 import { CreateExpenseInput, UpdateExpenseInput } from '../lib/validation/schemas';
 import { ValidationError, NotFoundError, ForbiddenError, ConflictError } from '../lib/errors';
 import { ExpenseStatus, AuditAction, StaffRole, Prisma } from '../app/generated/prisma/client';
+import { sheetsSyncService } from './sheets-sync.service';
 import prisma from '../lib/db/prisma';
 
 // Valid status transitions map for regular staff
@@ -128,7 +129,7 @@ export class ExpenseService {
 
     const decimalAmount = new Prisma.Decimal(input.amount);
 
-    return prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       // Duplicate detection
       const duplicate = await expenseRepository.findRecentDuplicate(
         {
@@ -209,6 +210,13 @@ export class ExpenseService {
 
       return expense;
     });
+
+    // Non-blocking initial Google Sheets sync attempt after Neon transaction commits
+    sheetsSyncService.syncExpense(result.id, { actor }).catch((err) => {
+      console.error('[Initial Sheets Sync Error]:', err);
+    });
+
+    return result;
   }
 
   /**
@@ -237,7 +245,7 @@ export class ExpenseService {
       this.validateStatusTransition(existing.status, input.status, actor.role);
     }
 
-    return prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const updateData: Prisma.ExpenseUncheckedUpdateInput = {};
       const oldDiff: Record<string, unknown> = {};
       const newDiff: Record<string, unknown> = {};
@@ -324,6 +332,19 @@ export class ExpenseService {
 
       return updated;
     });
+
+    // Non-blocking Google Sheets sync update after Neon transaction commits
+    sheetsSyncService.syncExpense(result.id, { actor }).catch((err) => {
+      console.error('[Update Sheets Sync Error]:', err);
+    });
+
+    return result;
+  }
+
+  async getDashboardStats(actor: Actor) {
+    requireActor(actor);
+    const staffId = actor.role === StaffRole.STAFF ? actor.id : undefined;
+    return expenseRepository.getDashboardAggregates(staffId);
   }
 }
 
