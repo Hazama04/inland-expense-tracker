@@ -47,9 +47,9 @@ export const backgroundScheduler = {
 /**
  * Validates Fonnte webhook authentication token / secret across:
  * 1. Authorization header (Bearer <token> or raw <token>)
- * 2. Token custom headers (`token`, `x-fonnte-token`, `x-token`)
- * 3. Query string parameters (`?token=...`, `?secret=...`, `?key=...`)
- * 4. Request body payload fields (`token`, `secret`, `key`)
+ * 2. Token custom headers (`x-fonnte-token`, `token`)
+ * 3. Body payload fields (Fonnte official `secret_key`, `token`, `secret`)
+ * 4. Query string parameters (`?token=...`, `?secret_key=...`, `?secret=...`)
  */
 function verifyWebhookSecret(req: NextRequest, body?: unknown): boolean {
   const expectedSecret =
@@ -75,44 +75,43 @@ function verifyWebhookSecret(req: NextRequest, body?: unknown): boolean {
 
   // 2. Custom token headers
   const tokenHeader =
-    req.headers.get('token')?.trim() ||
     req.headers.get('x-fonnte-token')?.trim() ||
-    req.headers.get('x-token')?.trim() ||
+    req.headers.get('token')?.trim() ||
     null;
 
-  // 3. Query parameters (?token=... or ?secret=... or ?key=...)
-  const searchParams = req.nextUrl.searchParams;
-  const urlToken =
-    searchParams.get('token')?.trim() ||
-    searchParams.get('secret')?.trim() ||
-    searchParams.get('key')?.trim() ||
-    null;
-
-  // 4. Request body payload fields (body.token, body.secret, body.key)
+  // 3. Body payload fields (Fonnte official `secret_key`, `token`, `secret`)
   let bodyToken: string | null = null;
   if (body && typeof body === 'object' && body !== null) {
     const b = body as Record<string, unknown>;
-    if (typeof b.token === 'string') bodyToken = b.token.trim();
+    if (typeof b.secret_key === 'string') bodyToken = b.secret_key.trim();
+    else if (typeof b.token === 'string') bodyToken = b.token.trim();
     else if (typeof b.secret === 'string') bodyToken = b.secret.trim();
-    else if (typeof b.key === 'string') bodyToken = b.key.trim();
   }
 
-  const providedToken = bearerToken || tokenHeader || urlToken || bodyToken;
+  // 4. Query string parameters (?token=... or ?secret_key=... or ?secret=...)
+  const searchParams = req.nextUrl.searchParams;
+  const urlToken =
+    searchParams.get('token')?.trim() ||
+    searchParams.get('secret_key')?.trim() ||
+    searchParams.get('secret')?.trim() ||
+    null;
+
+  const providedToken = bearerToken || tokenHeader || bodyToken || urlToken;
   const isAuthenticated = providedToken === expectedSecret;
 
-  // Safe diagnostic log (NEVER logs actual secrets or token strings)
+  // Safe diagnostic logging — NEVER logs secrets or tokens
   const authMethod = bearerToken
     ? 'authorization'
     : tokenHeader
     ? 'token_header'
-    : urlToken
-    ? 'query_param'
     : bodyToken
     ? 'body_payload'
+    : urlToken
+    ? 'query_param'
     : 'none';
 
   console.log(
-    `[Webhook Auth] authorization present: ${!!authHeader} | token header present: ${!!tokenHeader} | query token present: ${!!urlToken} | body token present: ${!!bodyToken} | expected token configured: ${!!expectedSecret} | authentication method: ${authMethod} | result: ${isAuthenticated ? 'SUCCESS' : 'REJECTED'}`
+    `[Webhook Auth] authorization_present=${!!authHeader} token_header_present=${!!tokenHeader} body_token_present=${!!bodyToken} query_token_present=${!!urlToken} expected_token_configured=${!!expectedSecret} authentication_method=${authMethod} authentication_result=${isAuthenticated ? 'success' : 'rejected'}`
   );
 
   return isAuthenticated;

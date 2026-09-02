@@ -174,6 +174,27 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
       assert.strictEqual(res.status, 200);
     });
 
+    it('should accept requests authenticated via official Fonnte secret_key body field', async () => {
+      staffRepository.findActiveByPhone = async (phone: string) => {
+        return phone === activeStaff.phoneNumber ? activeStaff : null;
+      };
+
+      const req = new NextRequest('http://localhost:3000/api/webhook', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          sender: '081234567890',
+          message: 'bantuan',
+          secret_key: 'test_webhook_secret_token_123',
+        }),
+      });
+
+      const res = await webhookHandler(req);
+      assert.strictEqual(res.status, 200);
+    });
+
     it('should accept requests authenticated via body payload token field', async () => {
       staffRepository.findActiveByPhone = async (phone: string) => {
         return phone === activeStaff.phoneNumber ? activeStaff : null;
@@ -221,6 +242,41 @@ describe('Fonnte WhatsApp Webhook & Bot Integration', () => {
       // Clean up
       delete process.env.FONNTE_TOKEN;
       process.env.FONNTE_WEBHOOK_TOKEN = 'test_webhook_secret_token_123';
+    });
+
+    it('should never expose raw credentials or secret tokens in log messages', async () => {
+      const logs: string[] = [];
+      const origLog = console.log;
+      console.log = (...args: unknown[]) => {
+        logs.push(args.map(String).join(' '));
+        origLog(...args);
+      };
+
+      try {
+        const secretToken = 'super_secret_fonnte_token_never_log_me';
+        process.env.FONNTE_WEBHOOK_TOKEN = secretToken;
+
+        const req = new NextRequest('http://localhost:3000/api/webhook', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${secretToken}`,
+          },
+          body: JSON.stringify({
+            sender: '081234567890',
+            message: 'bantuan',
+          }),
+        });
+
+        await webhookHandler(req);
+
+        // Verify none of the emitted logs contain the secret token
+        const leaked = logs.some((l) => l.includes(secretToken));
+        assert.strictEqual(leaked, false, 'Secret token was leaked in logs!');
+      } finally {
+        console.log = origLog;
+        process.env.FONNTE_WEBHOOK_TOKEN = 'test_webhook_secret_token_123';
+      }
     });
   });
 
